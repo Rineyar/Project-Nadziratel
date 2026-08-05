@@ -1,14 +1,9 @@
-use std::fs::read;
-use image::{load_from_memory_with_format, guess_format, DynamicImage};
+use image::{DynamicImage, ImageReader, ImageBuffer, Luma};
 
 fn main() 
 {
-    let raw_img: Vec<u8> = read("test.png").expect("Read IMG error!\n"); //Чтение изображения
+    let img: DynamicImage = ImageReader::open("test.png").expect("Open IMG error!\n").decode().expect("Decode error!\n");
 
-    println!("Raw len: {:?}", raw_img.len());
-
-    //Получить чистое изображение
-    let img: DynamicImage = load_from_memory_with_format(&raw_img, guess_format(&raw_img).expect("Unknown format!\n")).expect("Load IMG error!\n");
-
-    println!("Clear len: {:?}", img.into_bytes().len());
+    let gray: ImageBuffer<Luma<u8>, Vec<u8>> = img.to_luma8();
+    gray.save("gray.png").unwrap();
 }
