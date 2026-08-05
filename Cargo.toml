@@ -1,0 +1,8 @@
+[package]
+name = "project_nadziratel"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+image = "0.25.10"
+my_utils = { path = "../my_utils" }
