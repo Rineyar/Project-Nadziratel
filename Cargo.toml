@@ -7,3 +7,4 @@ edition = "2024"
 image = "0.25.10"
 imageproc = "0.27.0"
 my_utils = { path = "../my_utils" }
+oar-ocr = { version = "0.9.0" }

@@ -1,8 +1,12 @@
-use image::{DynamicImage, ImageReader, GrayImage}; //Для считывания
+use std::time::Instant;
+
+use image::{DynamicImage, ImageReader, GrayImage, RgbImage}; //Для считывания
 use image::imageops::{resize, FilterType::Lanczos3}; //Для увеличения
 use imageproc::contrast::{otsu_level, threshold, ThresholdType::Binary}; //Для бинаризации
 use image::imageops::invert; //Для инверсии
 use imageproc::{distance_transform::Norm::LInf, morphology::{erode, dilate}}; //Для чистки
+
+use oar_ocr::prelude::*; //Для распознования
 
 /*
 //Когда потребуется читать с байтов
@@ -11,15 +15,22 @@ fn read_img_from_bytes() -> DynamicImage
     use std::fs::read;
     use image::{load_from_memory_with_format, guess_format};
 
-    let raw_img: Vec<u8> = read("test.png").expect("Read IMG error!\n");
+    let raw_img: Vec<u8> = read("img.png").expect("Read IMG error!\n");
 
     return load_from_memory_with_format(&raw_img, guess_format(&raw_img).expect("Unknown format!\n")).expect("Load IMG error!\n");
 }
 */
 
+fn gray_to_rgb(img: &GrayImage) -> RgbImage
+{
+    return DynamicImage::ImageLuma8(img.clone()).into_rgb8();
+}
+
 fn main() 
 {
-    let img: DynamicImage = ImageReader::open("test.png").expect("Open IMG error!\n").decode().expect("Decode error!\n");
+    let time_start: Instant = Instant::now();
+
+    let img: DynamicImage = ImageReader::open("img.png").expect("Open IMG error!\n").decode().expect("Decode error!\n");
 
     let gray: GrayImage = img.to_luma8();
     gray.save("gray.png").unwrap();
@@ -46,4 +57,22 @@ fn main()
 
     let eroded: GrayImage = erode(&binary, LInf, 1);
     eroded.save("eroded.png").unwrap();
+
+    let ocr: OAROCR = OAROCRBuilder::new(
+    "models/pp-ocrv5_mobile_det.onnx", //Ищет текст
+    "models/eslav_pp-ocrv5_mobile_rec.onnx", //Пытается понять че написано
+    "models/ppocrv5_eslav_dict.txt") //Словарь
+    .build().expect("OCR build error!\n");
+
+    let res: Vec<OAROCRResult> = ocr.predict(vec![gray_to_rgb(&gray)]).expect("OCR error!\n");
+
+    for region in &res[0].text_regions
+    {
+        if let Some((text, confidence)) = region.text_with_confidence()
+        {
+            println!("{text} — {confidence:.2}");
+        }
+    }
+
+    println!("{:?}", time_start.elapsed());
 }
