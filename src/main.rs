@@ -10,13 +10,16 @@ use std::collections::HashMap; //Для словаря
 
 //Для логов
 use std::time::{Instant, Duration};
-use chrono::Local;
+use chrono::{Local, prelude::DateTime};
 use tracing_appender::{rolling::{never, RollingFileAppender}, non_blocking};
 use tracing::{error, info, warn};
+use serde::Serialize;
+use std::fs::{File, OpenOptions, write};
+use std::io::Write;
 
 //Крейт
 mod discord; //Обработчик событий
-use discord::Handler;
+use discord::{Handler, MsgData};
 
 mod image_lap; //Загрузка изображения из байт
 use image_lap::img_from_bytes;
@@ -26,6 +29,26 @@ use ocr::{build_ocr, get_clear_text};
 
 mod text_analisation; //Подсчёт слов
 use text_analisation::{AnalysisResult, score_text, load_dict};
+
+const SCORE_LIMIT: usize = 6;
+
+#[derive(Serialize)]
+struct ImgLog
+{
+    message_id: u64,
+    channel_id: u64,
+    user_id: u64,
+    username: String,
+    time: String,
+    message_text: String,
+    attachment_id: u64,
+    filename: String,
+    ocr_text: String,
+    score: usize,
+    matches: Vec<String>,
+    raw_path: String,
+    prog_path: String
+}
 
 fn load_settings() -> (String, usize, String)
 {
@@ -68,7 +91,9 @@ async fn main()
 {
     let time_start: Instant = Instant::now();
 
-    let log_file: String = format!("run_{}.log", Local::now().format("%Y-%m-%d_%H-%M-%S"));
+    let start_date: DateTime<Local> = Local::now();
+
+    let log_file: String = format!("run_{}.log", start_date.format("%Y-%m-%d_%H-%M-%S"));
 
     let file_appender: RollingFileAppender = never("logs/program", log_file);
 
@@ -92,7 +117,7 @@ async fn main()
         | GatewayIntents::GUILD_MESSAGES //Новые сообщения
         | GatewayIntents::MESSAGE_CONTENT; //Содержание сообщений
 
-    let (img_tx, mut img_rx) = channel::<Option<(Vec<u8>, ChannelId)>>(32); //Канал связи с картинками
+    let (img_tx, mut img_rx) = channel::<Option<(Vec<u8>, MsgData)>>(32); //Канал связи с картинками
 
     let (call_tx, mut call_rx) = channel::<(u8, ChannelId)>(32); //Канал связи с обраткой
 
@@ -120,14 +145,21 @@ async fn main()
 
         info!("Dict loaded: {:?}", time_start.elapsed());
 
+        let mut json_file: File = OpenOptions::new().create(true).append(true).open(format!("logs/imglog_{}.jsonl", 
+        start_date.format("%Y-%m-%d_%H-%M-%S"))).expect("JSON log open error!\n");
+
+        info!("Json opened: {:?}", time_start.elapsed());
+
         while let Some(message) = img_rx.blocking_recv() //Приёмка
         {
-            let Some((bytes, ch_id)) = message else //Распаковка
+            let Some((bytes, data)) = message else //Распаковка
             {
                 break;
             };
 
             let time_to_work: Instant = Instant::now();
+
+            let channel_id: ChannelId = data.channel_id;
 
             warn!("Получено изображение: {} байт", bytes.len());
 
@@ -142,6 +174,26 @@ async fn main()
                 }
             };
 
+            match write(format!("logs/images/raw_{}_{}_{}.png", data.user_id, data.message_id, data.att_id), bytes)
+            {
+                Ok(()) => {}
+
+                Err(err) =>
+                {
+                    error!("Raw img save error!\n{:?}", err);
+                }
+            }
+
+            match img.save(format!("logs/images/prog_{}_{}_{}.png", data.user_id, data.message_id, data.att_id))
+            {
+                Ok(()) => {}
+
+                Err(err) =>
+                {
+                    error!("Prog img save error!\n{:?}", err);
+                }
+            }
+
             let text: Vec<String> = match get_clear_text(&ocr, vec![img]) //Получение текста с картинки
             {
                 Ok(ok) => ok,
@@ -153,15 +205,19 @@ async fn main()
                 }
             };
 
+            let mut matches: Vec<String> = Vec::with_capacity(4);
+            let mut score: usize = 0;
+            let mut full_text: String = String::with_capacity(256);
+
             for (i, elem) in text.iter().enumerate() //Каждой картинке свой текст
             {
                 let res: AnalysisResult = score_text(elem, &dict); //Результат
 
                 warn!("N{} Score: {}", i, res.score);
                 
-                if res.score > 5 //Что-то есть
+                if res.score > SCORE_LIMIT //Что-то есть
                 {
-                    match call_tx.blocking_send((1, ch_id)) //Знак в обратку, что нечисто
+                    match call_tx.blocking_send((1, channel_id)) //Знак в обратку, что нечисто
                     {
                         Ok(()) => 
                         {
@@ -176,7 +232,9 @@ async fn main()
 
                     for match_ in res.matches.iter()
                     {
-                        warn!("{}", match_)
+                        warn!("{}", match_);
+
+                        matches.push(match_.to_string());
                     }
                 } /*else {
                     match call_tx.blocking_send((0, ch_id)) //Знак в обратку, что чисто
@@ -189,6 +247,43 @@ async fn main()
                         }
                     }
                 }*/
+                
+                score += res.score;
+                
+                full_text.push_str(elem);
+            }
+
+            let record: ImgLog = ImgLog
+            {
+                message_id: data.message_id.get(),
+                channel_id: data.channel_id.get(),
+                user_id: data.user_id.get(),
+                username: data.username,
+                time: data.time.to_string(),
+                message_text: data.text,
+                attachment_id: data.att_id.get(),
+                filename: data.filename,
+                ocr_text: full_text,
+                score: score,
+                matches: matches,
+                raw_path: format!("logs/images/raw_{}_{}_{}.png", data.user_id, data.message_id, data.att_id),
+                prog_path: format!("logs/images/prog_{}_{}_{}.png", data.user_id, data.message_id, data.att_id)
+            };
+
+            match serde_json::to_string(&record)
+            {
+                Ok(json) =>
+                {
+                    if let Err(err) = writeln!(json_file, "{}", json)
+                    {
+                        error!("JSON write error!\n{:?}", err);
+                    }
+                }
+
+                Err(err) =>
+                {
+                    error!("JSON serialize error!\n{:?}", err);
+                }
             }
 
             //+1 к сделанным
@@ -204,7 +299,7 @@ async fn main()
     //Поток на отправку сообщений
     tokio::spawn(async move
     {
-        while let Some((res, ch_id)) = call_rx.recv().await //Ждём сообщение
+        while let Some((res, channel_id)) = call_rx.recv().await //Ждём сообщение
         {
             if res == 0
             {
@@ -212,7 +307,7 @@ async fn main()
             } else if res == 1
             {
                 //Отправить сообщение в дискорд
-                match ch_id.say(&http,format!("<@{adm_id}> обнаружено подозрительное изображение")).await
+                match channel_id.say(&http,format!("<@{adm_id}> обнаружено подозрительное изображение")).await
                 {
                     Ok(_) => 
                     {

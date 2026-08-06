@@ -2166,6 +2166,8 @@ dependencies = [
  "imageproc",
  "my_utils",
  "oar-ocr",
+ "serde",
+ "serde_json",
  "serenity",
  "strsim",
  "tokio",

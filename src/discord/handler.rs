@@ -1,10 +1,22 @@
-use serenity::all::{Context, EventHandler, Message, ChannelId}; //Для Handler
+use serenity::all::{AttachmentId, ChannelId, Context, EventHandler, Message, MessageId, Timestamp, UserId}; //Для Handler
 use tokio::sync::mpsc::{Sender}; //Связь с распределителем
 use tracing::{error};
 
 pub struct Handler
 {
-    pub img_tx: Sender<Option<(Vec<u8>, ChannelId)>>,
+    pub img_tx: Sender<Option<(Vec<u8>, MsgData)>>,
+}
+
+pub struct MsgData
+{
+    pub message_id: MessageId,
+    pub channel_id: ChannelId,
+    pub user_id: UserId,
+    pub username: String,
+    pub time: Timestamp,
+    pub text: String,
+    pub att_id: AttachmentId,
+    pub filename: String,
 }
 
 #[serenity::async_trait]
@@ -35,7 +47,9 @@ impl EventHandler for Handler
             {
                 Ok(bytes) =>
                 {
-                    match self.img_tx.send(Some((bytes, msg.channel_id))).await
+                    match self.img_tx.send(Some((bytes, MsgData { message_id: msg.id, channel_id: msg.channel_id, user_id: msg.author.id, 
+                    username: msg.author.name.clone(), time: msg.timestamp, text: msg.content.clone(), att_id: attachment.id, 
+                    filename: attachment.filename.clone() }))).await
                     {
                         Ok(()) => {}
                         
