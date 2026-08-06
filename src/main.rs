@@ -47,7 +47,8 @@ struct ImgLog
     score: usize,
     matches: Vec<String>,
     raw_path: String,
-    prog_path: String
+    prog_path: String,
+    log_path: String
 }
 
 fn load_settings() -> (String, usize, String)
@@ -145,7 +146,7 @@ async fn main()
 
         info!("Dict loaded: {:?}", time_start.elapsed());
 
-        let mut json_file: File = OpenOptions::new().create(true).append(true).open(format!("logs/imglog_{}.jsonl", 
+        let mut json_file: File = OpenOptions::new().create(true).append(true).open(format!("logs/log_{}.jsonl", 
         start_date.format("%Y-%m-%d_%H-%M-%S"))).expect("JSON log open error!\n");
 
         info!("Json opened: {:?}", time_start.elapsed());
@@ -267,7 +268,8 @@ async fn main()
                 score: score,
                 matches: matches,
                 raw_path: format!("logs/images/raw_{}_{}_{}.png", data.user_id, data.message_id, data.att_id),
-                prog_path: format!("logs/images/prog_{}_{}_{}.png", data.user_id, data.message_id, data.att_id)
+                prog_path: format!("logs/images/prog_{}_{}_{}.png", data.user_id, data.message_id, data.att_id),
+                log_path: format!("logs/program/run_{}.log", start_date.format("%Y-%m-%d_%H-%M-%S"))
             };
 
             match serde_json::to_string(&record)
