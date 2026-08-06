@@ -8,6 +8,13 @@ use std::{thread, thread::JoinHandle}; //Для распознования
 use std::sync::Arc; //Для завершителя и передачек
 use std::collections::HashMap; //Для словаря
 
+//Для логов
+use std::time::{Instant, Duration};
+use chrono::Local;
+use tracing_appender::{rolling::{never, RollingFileAppender}, non_blocking};
+use tracing::{error, info, warn};
+
+//Крейт
 mod discord; //Обработчик событий
 use discord::Handler;
 
@@ -20,11 +27,11 @@ use ocr::{build_ocr, get_clear_text};
 mod text_analisation; //Подсчёт слов
 use text_analisation::{AnalysisResult, score_text, load_dict};
 
-fn load_settings() -> (String, usize)
+fn load_settings() -> (String, usize, String)
 {
     let content: String = read_to_string("settings").expect("Settings load error!\n");
 
-    let mut res: (String, usize) = ("".to_string(), 0);
+    let mut res: (String, usize, String) = ("".to_string(), 0, "".to_string());
 
     for line in content.lines()
     {
@@ -37,7 +44,7 @@ fn load_settings() -> (String, usize)
 
         let Some((key, data)) = line.split_once('\t') else
         {
-            eprintln!("Invalid settings line: {line}");
+            error!("Invalid settings line: {line}");
             continue;
         };
 
@@ -47,6 +54,9 @@ fn load_settings() -> (String, usize)
         } else if key == "ADM_ID"
         {
             res.1 = data.parse::<usize>().expect("Invalid ADM_ID");
+        } else if key == "PTD"
+        {
+            res.2 = data.to_string();
         }
     }
 
@@ -56,9 +66,25 @@ fn load_settings() -> (String, usize)
 #[tokio::main]
 async fn main()
 {
-    let (ptt, adm_id) = load_settings();
+    let time_start: Instant = Instant::now();
+
+    let log_file: String = format!("run_{}.log", Local::now().format("%Y-%m-%d_%H-%M-%S"));
+
+    let file_appender: RollingFileAppender = never("logs/program", log_file);
+
+    let (loger, _guard) = non_blocking(file_appender);
+
+    tracing_subscriber::fmt().with_writer(loger).with_ansi(false).init();
+
+    info!("Loger started: {:?}", time_start.elapsed());
+
+    let (ptt, adm_id, ptd) = load_settings(); //Путь до токена, словаря и id админа
+
+    info!("Setting loaded: {:?}", time_start.elapsed());
 
     let token: String = read_to_string(ptt).expect("Token read error!\n").trim().to_string(); //Получить токен
+
+    info!("Bot token readed: {:?}", time_start.elapsed());
 
     //Области доступа
     let intents: GatewayIntents =
@@ -66,11 +92,11 @@ async fn main()
         | GatewayIntents::GUILD_MESSAGES //Новые сообщения
         | GatewayIntents::MESSAGE_CONTENT; //Содержание сообщений
 
-    let (img_tx, mut img_rx) = channel::<(Vec<u8>, ChannelId)>(128); //Канал связи с картинками
+    let (img_tx, mut img_rx) = channel::<Option<(Vec<u8>, ChannelId)>>(32); //Канал связи с картинками
 
-    let (call_tx, mut call_rx) = channel::<(u8, ChannelId)>(16); //Канал связи с обраткой
+    let (call_tx, mut call_rx) = channel::<(u8, ChannelId)>(32); //Канал связи с обраткой
 
-    let handler: Handler = Handler { img_tx }; //Обработчик
+    let handler: Handler = Handler { img_tx: img_tx.clone() }; //Обработчик
 
     //Определить тело и передать обработчик
     let mut client: Client = Client::builder(token, intents).event_handler(handler).await.expect("Bot build error!\n");
@@ -78,35 +104,51 @@ async fn main()
     //Отправитель сообщений
     let http: Arc<Http> = client.http.clone();
 
+    info!("Bot builder ready: {:?}", time_start.elapsed());
+
     //Синхронный поток обработки картинок
-    let thread: JoinHandle<()> = thread::spawn(move ||
+    let thread: JoinHandle<(usize, Duration)> = thread::spawn(move ||
     {
+        //Счётчик работы
+        let (mut count, mut time_spended): (usize, Duration) = (0, Duration::ZERO);
+
         let ocr: OAROCR = build_ocr(); //Распознователь
 
-        let dict: HashMap<String, usize> = load_dict("src/text_analisation/words.txt"); //Словарь
+        info!("OCR builded: {:?}", time_start.elapsed());
 
-        while let Some((bytes, ch_id)) = img_rx.blocking_recv() //Приёмка
+        let dict: HashMap<String, usize> = load_dict(&ptd); //Словарь
+
+        info!("Dict loaded: {:?}", time_start.elapsed());
+
+        while let Some(message) = img_rx.blocking_recv() //Приёмка
         {
-            println!("Получено изображение: {} байт", bytes.len());
+            let Some((bytes, ch_id)) = message else //Распаковка
+            {
+                break;
+            };
 
-            let img: RgbImage = match img_from_bytes(&bytes)
+            let time_to_work: Instant = Instant::now();
+
+            warn!("Получено изображение: {} байт", bytes.len());
+
+            let img: RgbImage = match img_from_bytes(&bytes) //Загрузка картинки с байт
             {
                 Ok(ok) => ok,
 
                 Err(err) =>
                 {
-                    eprintln!("Img load error!\n{:?}", err);
+                    error!("Img load error!\n{:?}", err);
                     continue;
                 }
             };
 
-            let text: Vec<String> = match get_clear_text(&ocr, vec![img])
+            let text: Vec<String> = match get_clear_text(&ocr, vec![img]) //Получение текста с картинки
             {
                 Ok(ok) => ok,
 
                 Err(err) =>
                 {
-                    eprintln!("OCR error!\n{:?}", err);
+                    error!("OCR error!\n{:?}", err);
                     continue;     
                 }
             };
@@ -115,25 +157,26 @@ async fn main()
             {
                 let res: AnalysisResult = score_text(elem, &dict); //Результат
 
-                println!("{} img: {}", i, res.score);
+                warn!("N{} Score: {}", i, res.score);
                 
                 if res.score > 5 //Что-то есть
                 {
-                    println!("ADMIN called, matches:");
-
                     match call_tx.blocking_send((1, ch_id)) //Знак в обратку, что нечисто
                     {
-                        Ok(()) => {}
+                        Ok(()) => 
+                        {
+                            warn!("ADMIN call sended, matches:")
+                        }
 
                         Err(err) =>
                         {
-                            eprintln!("Call send error!\n{:?}", err);
+                            error!("Call send error!\n{:?}", err);
                         }
                     }
 
                     for match_ in res.matches.iter()
                     {
-                        println!("{}", match_)
+                        warn!("{}", match_)
                     }
                 } /*else {
                     match call_tx.blocking_send((0, ch_id)) //Знак в обратку, что чисто
@@ -142,36 +185,50 @@ async fn main()
 
                         Err(err) =>
                         {
-                            eprintln!("Call send error!\n{:?}", err);
+                            error!("Call send error!\n{:?}", err);
                         }
                     }
                 }*/
             }
+
+            //+1 к сделанным
+            count += 1;
+            time_spended += time_to_work.elapsed();
         }
+
+        return (count, time_spended); //Поскольку поток move, нужно делать возврат
     });
+
+    info!("Sync thread started: {:?}", time_start.elapsed());
 
     //Поток на отправку сообщений
     tokio::spawn(async move
     {
-        while let Some((res, ch_id)) = call_rx.recv().await
+        while let Some((res, ch_id)) = call_rx.recv().await //Ждём сообщение
         {
             if res == 0
             {
                 continue;
             } else if res == 1
             {
+                //Отправить сообщение в дискорд
                 match ch_id.say(&http,format!("<@{adm_id}> обнаружено подозрительное изображение")).await
                 {
-                    Ok(_) => {}
+                    Ok(_) => 
+                    {
+                        warn!("Admin called");
+                    }
 
                     Err(err) =>
                     {
-                        eprintln!("Message send error!\n{:?}", err);
+                        error!("Message send error!\n{:?}", err);
                     }
                 }
             }
         }
     });
+
+    info!("Msg async thread started: {:?}", time_start.elapsed());
 
     //Ссылка для завершителя
     let shard_manager: Arc<ShardManager> = client.shard_manager.clone();
@@ -179,24 +236,57 @@ async fn main()
     //Поток на завершение
     tokio::spawn(async move
     {
+        //Ctrl + C завершает
         tokio::signal::ctrl_c().await.expect("Ctrl+C handler error!\n");
 
-        println!("Завершение");
+        info!("Завершение");
 
-        match thread.join()
-        {
-            Ok(()) => {}
+        shard_manager.shutdown_all().await; //Закрытие бота
 
-            Err(err) =>
-            {
-                eprintln!("Thread join error!\n{:?}", err);
-            }
-        }
-
-        shard_manager.shutdown_all().await;
+        info!("Bot stopped async: {:?}", time_start.elapsed());
     });
+
+    info!("Ender async thread started: {:?}", time_start.elapsed());
     
+    info!("Bot started: {:?}", time_start.elapsed());
     //Старт бота
     client.start().await.expect("Bot start error!\n");
 
+    match img_tx.send(None).await //Отправка в sync поток для остановки
+    {
+        Ok(()) => {}
+
+        Err(err) => 
+        {
+            error!("None send error!\n{:?}", err);       
+        } 
+    };
+
+    //Чистка
+    drop(client);
+    drop(img_tx);
+
+    info!("Bot stopped sync: {:?}", time_start.elapsed());
+
+    match thread.join() //Сбор sync потока
+    {
+        Ok((count, time_spended)) => 
+        {
+            if count == 0
+            {
+                info!("Avg time to work: {}s", time_spended.as_secs());
+            } else {
+                info!("Avg time to work: {}s", time_spended.as_secs() as usize / count);
+            }
+
+            info!("Thread joined: {:?}", time_start.elapsed());
+        }
+
+        Err(err) =>
+        {
+            error!("Thread join error!\n{:?}", err);
+        }
+    }
+
+    info!("End: {:?}", time_start.elapsed());
 }
