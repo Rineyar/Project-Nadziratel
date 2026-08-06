@@ -1548,6 +1548,7 @@ dependencies = [
  "imageproc",
  "my_utils",
  "oar-ocr",
+ "strsim",
 ]
 
 [[package]]
