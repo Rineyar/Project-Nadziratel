@@ -1,15 +1,63 @@
-use std::fs::read_to_string; //Считать токен
-use serenity::all::{Client, GatewayIntents, ShardManager}; //Бот
-
+use std::fs::read_to_string; //Считать настройки и токен
+use serenity::all::{Client, GatewayIntents, ShardManager, ChannelId, Http}; //Бот
+use tokio::sync::mpsc::{channel}; //Связь
+use oar_ocr::prelude::OAROCR;
+use image::RgbImage;
+use std::thread; //Для распознования
 use std::sync::Arc; //Для завершителя
+use std::collections::HashMap; //Для словаря
 
 mod discord; //Обработчик событий
 use discord::Handler;
 
+mod image_lap;
+use image_lap::img_from_bytes;
+
+mod ocr;
+use ocr::{build_ocr, get_clear_text};
+
+mod text_analisation;
+use text_analisation::{AnalysisResult, score_text, load_dict};
+
+fn load_settings() -> (String, usize)
+{
+    let content: String = read_to_string("settings").expect("Settings load error!\n");
+
+    let mut res: (String, usize) = ("".to_string(), 0);
+
+    for line in content.lines()
+    {
+        let line: &str = line.trim();
+
+        if line.is_empty() || line.starts_with('#')
+        {
+            continue;
+        }
+
+        let Some((key, data)) = line.split_once('\t') else
+        {
+            eprintln!("Invalid dictionary line: {line}");
+            continue;
+        };
+
+        if key == "PTT"
+        {
+            res.0 = data.to_string();
+        } else if key == "ADM_ID"
+        {
+            res.1 = data.parse::<usize>().expect("Invalid ADM_ID");
+        }
+    }
+
+    return res;
+}
+
 #[tokio::main]
 async fn main()
 {
-    let token: String = read_to_string("env.local").expect("Token read error!\n").trim().to_string(); //Получить токен
+    let (ptt, adm_id) = load_settings();
+
+    let token: String = read_to_string(ptt).expect("Token read error!\n").trim().to_string(); //Получить токен
 
     //Области доступа
     let intents: GatewayIntents =
@@ -17,8 +65,83 @@ async fn main()
         | GatewayIntents::GUILD_MESSAGES //Новые сообщения
         | GatewayIntents::MESSAGE_CONTENT; //Содержание сообщений
 
-    //Определить тело | Обработчик внешний
-    let mut client: Client = Client::builder(token, intents).event_handler(Handler).await.expect("Bot build error!\n");
+    let (img_tx, mut img_rx) = channel::<(Vec<u8>, ChannelId)>(128); //Канал связи с картинками
+
+    let (call_tx, mut call_rx) = channel::<(u8, ChannelId)>(16); //Канал связи с обраткой
+
+    let handler: Handler = Handler { img_tx }; //Обработчик
+
+    //Определить тело и передать обработчик
+    let mut client: Client = Client::builder(token, intents).event_handler(handler).await.expect("Bot build error!\n");
+
+    //Отправитель сообщений
+    let http: Arc<Http> = client.http.clone();
+
+    //Синхронный поток обработки картинок
+    thread::spawn(move ||
+    {
+        let ocr: OAROCR = build_ocr(); //Распознователь
+
+        let dict: HashMap<String, usize> = load_dict("src/text_analisation/words.txt"); //Словарь
+
+        while let Some((bytes, ch_id)) = img_rx.blocking_recv() //Приёмка
+        {
+            println!("Получено изображение: {} байт", bytes.len());
+
+            let img: RgbImage = img_from_bytes(&bytes);
+
+            let text: Vec<String> = get_clear_text(&ocr, vec![img]);
+
+            for (i, elem) in text.iter().enumerate() //Каждой картинке свой текст
+            {
+                let res: AnalysisResult = score_text(elem, &dict); //Результат
+
+                println!("{} img: {}", i, res.score);
+                
+                if res.score > 5 //Что-то есть
+                {
+                    println!("ADMIN called, matches:");
+
+                    match call_tx.blocking_send((1, ch_id)) //Знак в обратку, что нечисто
+                    {
+                        Ok(()) => {}
+                        Err(err) =>
+                        {
+                            eprintln!("Call send error!\n{:?}", err);
+                        }
+                    }
+
+                    for match_ in res.matches.iter()
+                    {
+                        println!("{}", match_)
+                    }
+                } else {
+                    match call_tx.blocking_send((0, ch_id)) //Знак в обратку, что чисто
+                    {
+                        Ok(()) => {}
+                        Err(err) =>
+                        {
+                            eprintln!("Call send error!\n{:?}", err);
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    tokio::spawn(async move
+    {
+        while let Some((res, ch_id)) = call_rx.recv().await
+        {
+            if res == 0
+            {
+                continue;
+            } else if res == 1
+            {
+                ch_id.say(&http,format!("@{adm_id} обнаружено подозрительное изображение")).await.expect("ADMIN call error!\n");
+            }
+        }
+    });
 
     //Управление отсюда
     let shard_manager: Arc<ShardManager> = client.shard_manager.clone();
@@ -37,73 +160,3 @@ async fn main()
     client.start().await.expect("Bot start error!\n");
 
 }
-
-/*
-use std::{collections::HashMap, time::{Duration, Instant}};
-
-mod image_lap;
-use image::RgbImage;
-use image_lap::read_img_from_bytes;
-
-mod ocr;
-use ocr::{get_clear_text, build_ocr};
-
-mod text_analisation;
-use text_analisation::load_dict;
-use text_analisation::score_text;
-use text_analisation::AnalysisResult;
-
-const TESTS: usize = 7;
-
-fn main() 
-{
-    let time_start: Instant = Instant::now();
-
-    let mut imgvec: Vec<RgbImage> = Vec::with_capacity(TESTS);
-
-    for i in 0..TESTS
-    {
-        imgvec.push(read_img_from_bytes(&format!("imgs/img{}.png", i)));
-    }
-
-    let time_iml: Duration = time_start.elapsed();
-
-    let ocr: oar_ocr::prelude::OAROCR = build_ocr();
-
-    let time_ocrl: Duration = time_start.elapsed();
-
-    let dict: HashMap<String, usize> = load_dict("src/text_analisation/words.txt");
-
-    let time_dl: Duration = time_start.elapsed();
-
-    let text: Vec<String> = get_clear_text(&ocr, imgvec);
-
-    let time_tclr: Duration = time_start.elapsed();
-
-    for (i, elem) in text.iter().enumerate()
-    {
-        let res: AnalysisResult = score_text(elem, &dict);
-
-        println!("{} img:           {}", i, res.score);
-        
-        if res.score > 5
-        {
-            println!("ADMIN called, matches:");
-
-            for match_ in res.matches.iter()
-            {
-                println!("{}", match_)
-            }
-        }
-    }
-
-    let time_end: Duration = time_start.elapsed();
-
-    println!("Imgs load:        {:?}", time_iml);
-    println!("OCR build:        {:?}", time_ocrl - time_iml);
-    println!("Dicr load:        {:?}", time_dl - time_ocrl);
-    println!("Texts clear:      {:?}", time_tclr - time_dl);
-    println!("Score calc:       {:?}", time_end - time_tclr);
-    println!("Total time:       {:?}", time_start.elapsed());
-}
-*/
