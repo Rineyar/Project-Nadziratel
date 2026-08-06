@@ -1,32 +1,55 @@
 use image::RgbImage;
 use oar_ocr::prelude::*; //Для распознования
 
-pub const PURE_TEXT: &str = "РИА НОВОСТИ 12:56 30.07.2026 (обновлено 14:34 30.07.2026) Поделиться Комментарии Меллстрой открыл своё казино 
-    и в честь открытия раздаёт 10000 рублей каждому новому пользователю. Бонус можно получить на drgn36.com. 
-    После регистрации деньги поступают сразу на баланс. Играть или выводить - решайте сами.";
-
 pub fn ocrresult_to_string(ocrresult: &OAROCRResult) -> String
 {
-    return ocrresult.text_regions.iter().filter_map(|region|{region.text_with_confidence()
-    .map(|(text, _confidence)| text)}).collect::<Vec<&str>>().join(" ");
+    let mut result: String = String::with_capacity(1024);
+
+    for region in &ocrresult.text_regions
+    {
+        if let Some((text, _confidence)) = region.text_with_confidence()
+        {
+            if !result.is_empty()
+            {
+                result.push(' ');
+            }
+
+            result.push_str(text);
+        }
+    }
+
+    return result;
 }
 
 pub fn normalize(text: &str) -> String
 {
-    return text.to_lowercase().trim().split_whitespace().collect::<Vec<&str>>().join(" ");
-}
+    let mut result: String = String::with_capacity(text.len());
+    let mut need_space: bool = false;
 
-pub fn cer(expected: &str, actual: &str) -> f64
-{
-    use strsim::levenshtein;
+    for ch in text.chars().flat_map(char::to_lowercase)
+    {
+        let ch: char = match ch
+        {
+            'ё' => 'е',
+            _ => ch,
+        };
 
-    let expected: String = normalize(expected);
-    let actual: String = normalize(actual);
+        if ch.is_alphanumeric()
+        {
+            if need_space && !result.is_empty()
+            {
+                result.push(' ');
+            }
 
-    let distance: usize = levenshtein(&expected, &actual);
-    let length: usize = expected.chars().count().max(1);
+            result.push(ch);
 
-    return distance as f64 / length as f64;
+            need_space = false;
+        } else {
+            need_space = true;
+        }
+    }
+
+    return result;
 }
 
 pub fn build_ocr() -> OAROCR
@@ -38,15 +61,22 @@ pub fn build_ocr() -> OAROCR
     .build().expect("OCR build error!\n");
 }
 
-pub fn get_clear_text(ocr: OAROCR, images: Vec<RgbImage>) -> String
+pub fn get_clear_text(ocr: &OAROCR, images: Vec<RgbImage>) -> Vec<String>
 {
     let pred: Vec<OAROCRResult> = ocr.predict(images).expect("OCR error!\n");
 
-    let mut res: String = String::new();
+    let mut res: Vec<String> = Vec::with_capacity(pred.len());
 
-    for elem in pred.iter()
+    for elem in &pred
     {
-        res.push_str(&normalize(&ocrresult_to_string(elem)));
+        let text: String = normalize(&ocrresult_to_string(elem));
+
+        if text.is_empty()
+        {
+            continue;
+        }
+
+        res.push(text);
     }
 
     return res;

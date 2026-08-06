@@ -5,12 +5,12 @@ use image::imageops::invert; //Для инверсии
 use imageproc::{distance_transform::Norm::LInf, morphology::{erode, dilate}}; //Для чистки
 
 //Когда потребуется читать с байтов
-pub fn read_img_from_bytes() -> RgbImage
+pub fn read_img_from_bytes(path: &str) -> RgbImage
 {
     use std::fs::read;
     use image::{load_from_memory_with_format, guess_format};
 
-    let raw_img: Vec<u8> = read("img.png").expect("Read IMG error!\n");
+    let raw_img: Vec<u8> = read(path).expect("Read IMG error!\n");
 
     return load_from_memory_with_format(&raw_img, guess_format(&raw_img).expect("Unknown format!\n")).expect("Load IMG error!\n").into_rgb8();
 }
