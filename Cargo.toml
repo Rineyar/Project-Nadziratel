@@ -10,4 +10,4 @@ my_utils = { path = "../my_utils" }
 oar-ocr = { version = "0.9.0" }
 serenity = "0.12.5"
 strsim = "0.11.1"
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal"] }

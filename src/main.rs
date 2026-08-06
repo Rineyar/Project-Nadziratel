@@ -1,5 +1,7 @@
 use std::fs::read_to_string; //Считать токен
-use serenity::all::{Client, GatewayIntents}; //Бот
+use serenity::all::{Client, GatewayIntents, ShardManager}; //Бот
+
+use std::sync::Arc; //Для завершителя
 
 mod discord; //Обработчик событий
 use discord::Handler;
@@ -18,6 +20,19 @@ async fn main()
     //Определить тело | Обработчик внешний
     let mut client: Client = Client::builder(token, intents).event_handler(Handler).await.expect("Bot build error!\n");
 
+    //Управление отсюда
+    let shard_manager: Arc<ShardManager> = client.shard_manager.clone();
+
+    //Поток на завершение
+    tokio::spawn(async move
+    {
+        tokio::signal::ctrl_c().await.expect("Ctrl+C handler error!\n");
+
+        println!("Завершение");
+
+        shard_manager.shutdown_all().await;
+    });
+    
     //Старт бота
     client.start().await.expect("Bot start error!\n");
 
