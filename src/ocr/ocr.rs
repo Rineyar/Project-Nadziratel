@@ -61,9 +61,9 @@ pub fn build_ocr() -> OAROCR
     .build().expect("OCR build error!\n");
 }
 
-pub fn get_clear_text(ocr: &OAROCR, images: Vec<RgbImage>) -> Vec<String>
+pub fn get_clear_text(ocr: &OAROCR, images: Vec<RgbImage>) -> Result<Vec<String>, OCRError>
 {
-    let pred: Vec<OAROCRResult> = ocr.predict(images).expect("OCR error!\n");
+    let pred: Vec<OAROCRResult> = ocr.predict(images)?;
 
     let mut res: Vec<String> = Vec::with_capacity(pred.len());
 
@@ -79,5 +79,5 @@ pub fn get_clear_text(ocr: &OAROCR, images: Vec<RgbImage>) -> Vec<String>
         res.push(text);
     }
 
-    return res;
+    return Ok(res);
 }

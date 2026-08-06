@@ -1,4 +1,4 @@
-use image::{RgbImage, load_from_memory_with_format, guess_format}; //База
+use image::{DynamicImage, ImageError, ImageFormat, RgbImage, guess_format, load_from_memory_with_format}; //База
 // use image::{DynamicImage, ImageReader, GrayImage}; //Для считывания
 // use image::imageops::{resize, FilterType::Lanczos3}; //Для увеличения
 // use imageproc::contrast::{otsu_level, threshold, ThresholdType::Binary}; //Для бинаризации
@@ -14,9 +14,13 @@ use image::{RgbImage, load_from_memory_with_format, guess_format}; //База
 //     return load_from_memory_with_format(&raw_img, guess_format(&raw_img).expect("Unknown format!\n")).expect("Load IMG error!\n").into_rgb8();
 // }
 
-pub fn img_from_bytes(bytes: &[u8]) -> RgbImage
+pub fn img_from_bytes(bytes: &[u8]) -> Result<RgbImage, ImageError>
 {
-    return load_from_memory_with_format(&bytes, guess_format(&bytes).expect("Unknown format!\n")).expect("Load IMG error!\n").into_rgb8();
+    let form: ImageFormat = guess_format(bytes)?;
+
+    let img: DynamicImage = load_from_memory_with_format(bytes, form)?;
+
+    return Ok(img.into_rgb8());
 }
 
 // pub fn gray_to_rgb(img: GrayImage) -> RgbImage

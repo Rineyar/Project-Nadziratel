@@ -1,22 +1,23 @@
 use std::fs::read_to_string; //Считать настройки и токен
-use serenity::all::{Client, GatewayIntents, ShardManager, ChannelId, Http}; //Бот
+use serenity::all::{Client, GatewayIntents, ChannelId, Http}; //Бот
+use serenity::all::ShardManager;
 use tokio::sync::mpsc::{channel}; //Связь
-use oar_ocr::prelude::OAROCR;
-use image::RgbImage;
-use std::thread; //Для распознования
-use std::sync::Arc; //Для завершителя
+use oar_ocr::prelude::OAROCR; //Тип распознователя
+use image::RgbImage; //Тип изображения
+use std::{thread, thread::JoinHandle}; //Для распознования
+use std::sync::Arc; //Для завершителя и передачек
 use std::collections::HashMap; //Для словаря
 
 mod discord; //Обработчик событий
 use discord::Handler;
 
-mod image_lap;
+mod image_lap; //Загрузка изображения из байт
 use image_lap::img_from_bytes;
 
-mod ocr;
+mod ocr; //Поиск текста и чистка
 use ocr::{build_ocr, get_clear_text};
 
-mod text_analisation;
+mod text_analisation; //Подсчёт слов
 use text_analisation::{AnalysisResult, score_text, load_dict};
 
 fn load_settings() -> (String, usize)
@@ -36,7 +37,7 @@ fn load_settings() -> (String, usize)
 
         let Some((key, data)) = line.split_once('\t') else
         {
-            eprintln!("Invalid dictionary line: {line}");
+            eprintln!("Invalid settings line: {line}");
             continue;
         };
 
@@ -78,7 +79,7 @@ async fn main()
     let http: Arc<Http> = client.http.clone();
 
     //Синхронный поток обработки картинок
-    thread::spawn(move ||
+    let thread: JoinHandle<()> = thread::spawn(move ||
     {
         let ocr: OAROCR = build_ocr(); //Распознователь
 
@@ -88,9 +89,27 @@ async fn main()
         {
             println!("Получено изображение: {} байт", bytes.len());
 
-            let img: RgbImage = img_from_bytes(&bytes);
+            let img: RgbImage = match img_from_bytes(&bytes)
+            {
+                Ok(ok) => ok,
 
-            let text: Vec<String> = get_clear_text(&ocr, vec![img]);
+                Err(err) =>
+                {
+                    eprintln!("Img load error!\n{:?}", err);
+                    continue;
+                }
+            };
+
+            let text: Vec<String> = match get_clear_text(&ocr, vec![img])
+            {
+                Ok(ok) => ok,
+
+                Err(err) =>
+                {
+                    eprintln!("OCR error!\n{:?}", err);
+                    continue;     
+                }
+            };
 
             for (i, elem) in text.iter().enumerate() //Каждой картинке свой текст
             {
@@ -105,6 +124,7 @@ async fn main()
                     match call_tx.blocking_send((1, ch_id)) //Знак в обратку, что нечисто
                     {
                         Ok(()) => {}
+
                         Err(err) =>
                         {
                             eprintln!("Call send error!\n{:?}", err);
@@ -115,20 +135,22 @@ async fn main()
                     {
                         println!("{}", match_)
                     }
-                } else {
+                } /*else {
                     match call_tx.blocking_send((0, ch_id)) //Знак в обратку, что чисто
                     {
                         Ok(()) => {}
+
                         Err(err) =>
                         {
                             eprintln!("Call send error!\n{:?}", err);
                         }
                     }
-                }
+                }*/
             }
         }
     });
 
+    //Поток на отправку сообщений
     tokio::spawn(async move
     {
         while let Some((res, ch_id)) = call_rx.recv().await
@@ -138,12 +160,20 @@ async fn main()
                 continue;
             } else if res == 1
             {
-                ch_id.say(&http,format!("@{adm_id} обнаружено подозрительное изображение")).await.expect("ADMIN call error!\n");
+                match ch_id.say(&http,format!("<@{adm_id}> обнаружено подозрительное изображение")).await
+                {
+                    Ok(_) => {}
+
+                    Err(err) =>
+                    {
+                        eprintln!("Message send error!\n{:?}", err);
+                    }
+                }
             }
         }
     });
 
-    //Управление отсюда
+    //Ссылка для завершителя
     let shard_manager: Arc<ShardManager> = client.shard_manager.clone();
 
     //Поток на завершение
@@ -152,6 +182,16 @@ async fn main()
         tokio::signal::ctrl_c().await.expect("Ctrl+C handler error!\n");
 
         println!("Завершение");
+
+        match thread.join()
+        {
+            Ok(()) => {}
+
+            Err(err) =>
+            {
+                eprintln!("Thread join error!\n{:?}", err);
+            }
+        }
 
         shard_manager.shutdown_all().await;
     });
