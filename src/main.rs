@@ -274,9 +274,9 @@ async fn main()
         {
             if count == 0
             {
-                info!("Avg time to work: {}s", time_spended.as_secs());
+                info!("No work in this run");
             } else {
-                info!("Avg time to work: {}s", time_spended.as_secs() as usize / count);
+                info!("Avg time to work: {:.4}s", time_spended.as_secs_f64() / count as f64);
             }
 
             info!("Thread joined: {:?}", time_start.elapsed());
