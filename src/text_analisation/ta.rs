@@ -3,6 +3,8 @@ use std::collections::HashMap; //Хеш мапа
 use std::fs::read_to_string; //Счение строки
 use crate::ocr::normalize; //Нормализация
 
+use std::path::Path; //Для корректного типа пути к словарю
+
 // pub const PURE_TEXT: &str = "РИА НОВОСТИ 12:56 30.07.2026 (обновлено 14:34 30.07.2026) Поделиться Комментарии Меллстрой открыл своё казино 
 //     и в честь открытия раздаёт 10000 рублей каждому новому пользователю. Бонус можно получить на drgn36.com. 
 //     После регистрации деньги поступают сразу на баланс. Играть или выводить - решайте сами.";
@@ -23,7 +25,8 @@ pub struct AnalysisResult
 //     return distance as f64 / length as f64;
 // }
 
-pub fn load_dict(path: &str) -> HashMap<String, usize>
+pub fn load_dict<P>(path: P) -> HashMap<String, usize>
+where P: AsRef<Path>
 {
     let content: String = read_to_string(path).expect("Dictionary load error!\n");
 

@@ -1636,10 +1636,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "my_utils"
-version = "0.1.0"
-
-[[package]]
 name = "nalgebra"
 version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2164,7 +2160,6 @@ dependencies = [
  "chrono",
  "image",
  "imageproc",
- "my_utils",
  "oar-ocr",
  "serde",
  "serde_json",

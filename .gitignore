@@ -1,4 +1,9 @@
 /target
 /token
 /settings
-logs/
+logs/*
+!logs/images
+!logs/program
+logs/program/*
+logs/images/*
+**/*.local
