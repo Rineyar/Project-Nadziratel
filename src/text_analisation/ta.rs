@@ -5,6 +5,8 @@ use crate::ocr::normalize; //Нормализация
 
 use std::path::Path; //Для корректного типа пути к словарю
 
+use tracing::{error}; //Логи
+
 // pub const PURE_TEXT: &str = "РИА НОВОСТИ 12:56 30.07.2026 (обновлено 14:34 30.07.2026) Поделиться Комментарии Меллстрой открыл своё казино 
 //     и в честь открытия раздаёт 10000 рублей каждому новому пользователю. Бонус можно получить на drgn36.com. 
 //     После регистрации деньги поступают сразу на баланс. Играть или выводить - решайте сами.";
@@ -43,13 +45,17 @@ where P: AsRef<Path>
 
         let Some((key, weight)) = line.split_once('\t') else
         {
-            eprintln!("Invalid dictionary line: {line}");
+            error!("Invalid dictionary line: {line}");
+            println!("Корявая линия в словаре: {line}. Пу пу пу...");
+
             continue;
         };
 
         let Ok(weight) = weight.trim().parse::<usize>() else
         {
-            eprintln!("Invalid weight: {line}");
+            error!("Invalid weight: {line}");
+            println!("Корявый вес: {line}. Пу пу пу...");
+
             continue;
         };
 

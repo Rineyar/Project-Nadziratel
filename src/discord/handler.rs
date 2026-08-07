@@ -56,6 +56,7 @@ impl EventHandler for Handler
                         Err(err) =>
                         {
                             error!("Img send error!\n{:?}", err);
+                            println!("Ошибка отправки изображения! См. логи...");
                         }
                     };
                 }
@@ -63,6 +64,7 @@ impl EventHandler for Handler
                 Err(err) =>
                 {
                     error!("Download error!\n{:?}", err);
+                    println!("Ошибка скачивания изображения! См. логи...");
                 }
             }
         }
